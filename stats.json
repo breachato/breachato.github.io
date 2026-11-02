@@ -1,0 +1,17 @@
+{
+  "contributions": 645,
+  "horizonPRs": {
+    "count": 17,
+    "titles": [
+      "A pack's blockstate file stacks over vanilla's, state by state",
+      "The item_stack helper draws nothing for an empty stack",
+      "new_hook_placeholder_is_reported_then_filled compares with LF line endings",
+      "Native mods: an item frame or painting about to break, cancellable (native_hanging_break)",
+      "A shift-click during a drag on a mod menu type only ends the drag",
+      "A stack's rarity component sets the colour of its name",
+      "A boat's entity tick Post comes after the rest of its tick",
+      "A player's thrown trident fires the projectile impact hook"
+    ]
+  },
+  "updatedAt": "2026-11-02T14:56:14Z"
+}

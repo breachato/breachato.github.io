@@ -1,0 +1,56 @@
+name: Deploy
+
+# Pubblica il sito su GitHub Pages: a ogni push e ogni 6 ore,
+# aggiornando prima stats.json con i numeri presi da GitHub.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Aggiorna stats.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_USER: breachato
+        # se GitHub non risponde resta lo stats.json della repo
+        run: |
+          set -euo pipefail
+          contrib=$(gh api graphql -f query="{user(login:\"$GH_USER\"){contributionsCollection{contributionCalendar{totalContributions}}}}" \
+            --jq '.data.user.contributionsCollection.contributionCalendar.totalContributions') || { echo "contributi non disponibili"; exit 0; }
+          gh api "search/issues?q=repo:horizon-rust/horizon+author:$GH_USER+is:pr+is:merged&sort=created&order=desc&per_page=8" > prs.json \
+            || { echo "PR non disponibili"; exit 0; }
+          jq --argjson c "$contrib" '{
+              contributions: $c,
+              horizonPRs: { count: .total_count, titles: [.items[].title] },
+              updatedAt: (now | todate)
+            }' prs.json > stats.json
+          rm prs.json
+          cat stats.json
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
