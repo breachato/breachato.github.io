@@ -9,6 +9,8 @@ addEventListener('beforeunload', () => window.scrollTo(0, 0));
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const fine = matchMedia('(hover: hover) and (pointer: fine)').matches;
+// carosello orizzontale dei lavori: stessa media query del CSS
+const WIDE = '(min-width: 1000px) and (min-height: 560px)';
 
 // niente immagini o link trascinabili
 document.addEventListener('dragstart', e => e.preventDefault());
@@ -194,6 +196,8 @@ const setMenu = open => {
   if (lenis) open ? lenis.stop() : lenis.start();
 };
 ham.addEventListener('click', () => setMenu(!nav.classList.contains('open')));
+// se la finestra si allarga col menu aperto, il menu si chiude e lo scroll torna libero
+matchMedia('(min-width: 900px)').addEventListener('change', e => { if (e.matches && nav.classList.contains('open')) setMenu(false); });
 
 // ====== animazioni e scroll (GSAP + Lenis) ======
 window.addEventListener('DOMContentLoaded', () => {
@@ -295,13 +299,15 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // ---- lavori: carosello orizzontale bloccato su desktop ----
   const mm = gsap.matchMedia();
-  mm.add('(min-width: 900px)', () => {
+  mm.add(WIDE, () => {
     const track = $('#workTrack'), cards = $$('.wcard', track), idx = $('#workIdx'), bar = $('#workBar');
     const dist = () => track.scrollWidth - innerWidth;
     gsap.to(track, {
       x: () => -dist(), ease: 'none',
       scrollTrigger: {
         trigger: '.work', start: 'top top', end: () => '+=' + dist(), pin: true, scrub: true, invalidateOnRefresh: true,
+        // ricalcolato per primo: gli altri trigger della pagina dipendono dallo spazio che aggiunge
+        refreshPriority: 1,
         onUpdate: s => {
           idx.textContent = String(Math.min(cards.length, Math.floor(s.progress * cards.length * .999) + 1)).padStart(2, '0');
           bar.style.transform = `scaleX(${.2 + s.progress * .8})`;
@@ -309,15 +315,25 @@ window.addEventListener('DOMContentLoaded', () => {
       }
     });
   });
-  mm.add('(max-width: 899px)', () => {
+  mm.add(`not all and ${WIDE}`, () => {
     $$('.wcard').forEach(card => gsap.from(card, { y: 50, opacity: 0, duration: 1, ease: 'power3.out', scrollTrigger: { trigger: card, start: 'top 90%', once: true } }));
   });
 
-  // ---- link attivo nel menu (dopo il pin, così le posizioni sono giuste) ----
-  $$('.hdr-nav a').forEach(a => {
-    const sec = $(a.getAttribute('href'));
-    if (sec) ScrollTrigger.create({ trigger: sec, start: 'top 50%', end: 'bottom 50%', onToggle: s => a.classList.toggle('active', s.isActive) });
-  });
+  // ---- link attivo nel menu: la sezione che occupa il centro dello schermo ----
+  // per i Lavori conta il pin-spacer, che include tutto il tratto dello scroll orizzontale
+  const navLinks = $$('.hdr-nav a').map(a => [a, $(a.getAttribute('href'))]).filter(([, sec]) => sec);
+  const outer = el => el.parentElement.classList.contains('pin-spacer') ? el.parentElement : el;
+  const updateNav = () => {
+    const mid = innerHeight / 2;
+    const current = navLinks.find(([, sec]) => {
+      const r = outer(sec).getBoundingClientRect();
+      return r.top <= mid && r.bottom > mid;
+    });
+    navLinks.forEach(([a]) => a.classList.toggle('active', !!current && a === current[0]));
+  };
+  if (lenis) lenis.on('scroll', updateNav);
+  else addEventListener('scroll', updateNav, { passive: true });
+  ScrollTrigger.addEventListener('refresh', updateNav);
 
   // ---- stack: due righe che scorrono in direzioni opposte ----
   $$('.mq-row').forEach(row => {
