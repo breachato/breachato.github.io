@@ -1,7 +1,11 @@
 name: Deploy
 
-# Pubblica il sito su GitHub Pages: a ogni push e ogni 6 ore,
-# aggiornando prima stats.json con i numeri presi da GitHub.
+# Tiene il sito a posto da solo, a ogni push e ogni 6 ore:
+# 1. aggiorna stats.json (e i numeri di riserva in index.html) con i dati di GitHub
+# 2. li salva nella repo; i commit tengono attiva la repo, così GitHub non sospende
+#    questa Action dopo 60 giorni (se per 50 giorni non cambia nulla, fa un commit vuoto)
+# 3. pubblica il sito su GitHub Pages
+# 4. controlla che il sito risponda: se no la Action fallisce e GitHub manda un'email
 on:
   push:
     branches: [main]
@@ -10,13 +14,13 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -24,14 +28,15 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      GH_USER: breachato
     steps:
       - uses: actions/checkout@v4
 
-      - name: Aggiorna stats.json
+      - name: Aggiorna i numeri da GitHub
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_USER: breachato
-        # se GitHub non risponde resta lo stats.json della repo
+        # se GitHub non risponde restano i numeri già presenti nella repo
         run: |
           set -euo pipefail
           contrib=$(gh api graphql -f query="{user(login:\"$GH_USER\"){contributionsCollection{contributionCalendar{totalContributions}}}}" \
@@ -40,11 +45,43 @@ jobs:
             || { echo "PR non disponibili"; exit 0; }
           jq --argjson c "$contrib" '{
               contributions: $c,
-              horizonPRs: { count: .total_count, titles: [.items[].title] },
-              updatedAt: (now | todate)
-            }' prs.json > stats.json
+              horizonPRs: { count: .total_count, titles: [.items[].title] }
+            }' prs.json > stats.new.json
           rm prs.json
+          prs=$(jq '.horizonPRs.count' stats.new.json)
+
+          # updatedAt cambia solo se cambiano i numeri, così non si fa un commit a ogni giro
+          if [ -f stats.json ] && jq -e --slurpfile n stats.new.json 'del(.updatedAt) == $n[0]' stats.json > /dev/null; then
+            rm stats.new.json
+            echo "numeri invariati"
+          else
+            jq '. + { updatedAt: (now | todate) }' stats.new.json > stats.json
+            rm stats.new.json
+          fi
+
+          # numeri di riserva nella pagina (usati solo se stats.json non si carica)
+          sed -i -E \
+            -e "s#(data-stat=\"contributions\" data-count=\")[0-9]+(\">)[0-9]+<#\1$contrib\2$contrib<#" \
+            -e "s#(data-stat=\"prs\" data-count=\")[0-9]+(\">)[0-9]+<#\1$prs\2$prs<#" \
+            index.html
           cat stats.json
+
+      - name: Salva nella repo
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add stats.json index.html
+          if ! git diff --cached --quiet; then
+            git commit -m "Aggiorna i numeri da GitHub"
+          elif [ $(( $(date +%s) - $(git log -1 --format=%ct) )) -gt $(( 50 * 86400 )) ]; then
+            git commit --allow-empty -m "Keepalive: tiene attiva la Action programmata"
+          else
+            echo "niente da salvare"
+            exit 0
+          fi
+          # i push fatti con il token della Action non fanno ripartire la Action
+          git pull --rebase origin main && git push origin HEAD:main || echo "push non riuscito, riprovo al prossimo giro"
 
       - uses: actions/configure-pages@v5
 
@@ -54,3 +91,20 @@ jobs:
 
       - id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Controlla che il sito risponda
+        env:
+          SITE: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 12); do
+            page=$(curl -s -o /dev/null -w '%{http_code}' "${SITE}?check=$GITHUB_RUN_ID") || page=000
+            if [ "$page" = 200 ] && curl -sf "${SITE}stats.json?check=$GITHUB_RUN_ID" | jq -e '.contributions | numbers' > /dev/null; then
+              echo "sito ok"
+              exit 0
+            fi
+            echo "tentativo $i: pagina $page, riprovo tra 10s"
+            sleep 10
+          done
+          echo "::error::il sito non risponde correttamente"
+          exit 1
